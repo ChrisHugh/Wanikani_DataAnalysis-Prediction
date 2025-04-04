@@ -3,7 +3,7 @@
 .env.*
 
 # Data files
-data/raw/*
+data/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
