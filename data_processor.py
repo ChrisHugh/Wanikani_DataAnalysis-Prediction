@@ -1,15 +1,64 @@
 import pandas as pd
 import json
 import os
-from datetime import datetime
+import shutil
+from datetime import datetime, timedelta
 
 class WaniKaniDataProcessor:
-    def __init__(self):
+    def __init__(self, cache_duration_hours=168):  # 1 week cache
         self.raw_data_dir = "data/raw"
         self.processed_data_dir = "data/processed"
         self.curated_data_dir = "data/curated"
-        if not os.path.exists(self.curated_data_dir):
-            os.makedirs(self.curated_data_dir)
+        self.archive_dir = "data/archive"
+        self.cache_duration = timedelta(hours=cache_duration_hours)
+        
+        # Create directories if they don't exist
+        os.makedirs(self.curated_data_dir, exist_ok=True)
+        os.makedirs(self.archive_dir, exist_ok=True)
+
+    def _get_latest_file(self, directory, prefix):
+        """Get the most recent file for a given endpoint"""
+        files = [f for f in os.listdir(directory) if f.startswith(prefix)]
+        if not files:
+            return None
+        
+        # Sort by timestamp in filename (newest first)
+        latest_file = sorted(files, reverse=True)[0]
+        return os.path.join(directory, latest_file)
+
+    def _is_cache_valid(self, filepath):
+        """Check if the cached file is still valid"""
+        if not filepath or not os.path.exists(filepath):
+            return False
+        
+        # Extract timestamp from filename (format: curated_XXXX_YYYYMMDD_HHMMSS)
+        filename = os.path.basename(filepath)
+        timestamp_str = filename.split('_')[-2] + '_' + filename.split('_')[-1].split('.')[0]
+        file_time = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+        
+        # Check if file is older than cache duration
+        return datetime.now() - file_time < self.cache_duration
+
+    def _archive_old_files(self, prefix):
+        """Archive files older than cache duration for a given prefix"""
+        current_time = datetime.now()
+        
+        # Get all files with the given prefix
+        files = [f for f in os.listdir(self.curated_data_dir) if f.startswith(prefix)]
+        for file in files:
+            filepath = os.path.join(self.curated_data_dir, file)
+            # Extract timestamp (format: curated_XXXX_YYYYMMDD_HHMMSS)
+            timestamp_str = file.split('_')[-2] + '_' + file.split('_')[-1].split('.')[0]
+            file_time = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+            
+            if current_time - file_time >= self.cache_duration:
+                # Create archive subdirectory if it doesn't exist
+                archive_subdir = os.path.join(self.archive_dir, prefix)
+                os.makedirs(archive_subdir, exist_ok=True)
+                
+                # Move file to archive
+                shutil.move(filepath, os.path.join(archive_subdir, file))
+                print(f"Archived {file} to {archive_subdir}")
 
     def load_json_file(self, filepath):
         """Load JSON file and return as list of dictionaries"""
@@ -34,6 +83,14 @@ class WaniKaniDataProcessor:
 
     def process_file(self, filename):
         """Process a single JSON file and save both raw and processed versions"""
+        # Check for cached curated file
+        prefix = f"curated_{filename.replace('.json', '')}"
+        latest_curated = self._get_latest_file(self.curated_data_dir, prefix)
+        
+        if self._is_cache_valid(latest_curated):
+            print(f"Using cached curated data for {filename}")
+            return pd.read_csv(latest_curated)
+        
         # Load the JSON file
         filepath = os.path.join(self.raw_data_dir, filename)
         data = self.load_json_file(filepath)
@@ -41,9 +98,11 @@ class WaniKaniDataProcessor:
         # Expand the data
         expanded_df = self.expand_data_column(data)
         
+        # Archive old files before saving new ones
+        self._archive_old_files(prefix)
+        
         # Save processed data
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"curated_{filename.replace('.json', '')}_{timestamp}.csv"
+        output_filename = f"{prefix}.csv"
         output_path = os.path.join(self.curated_data_dir, output_filename)
         
         expanded_df.to_csv(output_path, index=False)
@@ -59,5 +118,5 @@ class WaniKaniDataProcessor:
                 self.process_file(filename)
 
 if __name__ == "__main__":
-    processor = WaniKaniDataProcessor()
+    processor = WaniKaniDataProcessor(cache_duration_hours=168)  # 1 week cache
     processor.process_all_files() 
